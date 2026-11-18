@@ -80009,7 +80009,7 @@ function renderMarkdown(ledger, { fullComments = true } = {}) {
       const sum = (k) => ledger.byBot.reduce((n, s) => n + s[k], 0);
       out.push(
         `> [!NOTE]
-> **AI-checked fixes:** Claude reviewed ${plural2(checked, "change")} made near a finding. ${sum("aiFixed")} fixed it, ${sum("aiPartly")} partly, and **${sum("aiUnrelated")} were unrelated**, so those no longer count as addressed. The rest couldn't be told from the diff and still count.`
+> **AI-checked fixes:** Claude reviewed ${plural2(checked, "change")} made near a finding. ${sum("aiFixed")} fixed it, ${sum("aiPartly")} partly fixed it and ${checked - sum("aiFixed") - sum("aiPartly") - sum("aiUnrelated")} couldn't be told from the diff; those still count as addressed. **${sum("aiUnrelated")} were unrelated** and count as addressed only where a person replied that it was fixed.`
       );
     }
   }
