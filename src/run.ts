@@ -1,4 +1,5 @@
 import { buildLedger, type Ledger } from "./aggregate/metrics.ts";
+import { judgeReplies, type ReplyJudge } from "./ai/reply-intent.ts";
 import { classify } from "./classify/rules.ts";
 import type { Cache } from "./collect/cache.ts";
 import { changedLinesSince } from "./collect/changes.ts";
@@ -12,6 +13,8 @@ export interface RunOptions {
   repos: string[];
   since: string;
   maxPrs: number;
+  /** With --ai: reads the intent of human replies instead of matching phrases. */
+  replyJudge?: ReplyJudge;
   log?: (message: string) => void;
 }
 
@@ -33,6 +36,11 @@ export async function run(
     const findingCount = prs.reduce((n, pr) => n + pr.findings.length, 0);
     log(`${repo}: ${prs.length} PRs, ${findingCount} AI findings`);
 
+    const intents = options.replyJudge
+      ? await judgeReplies(options.replyJudge, prs.flatMap((pr) => pr.findings))
+      : new Map();
+    if (options.replyJudge) log(`${repo}: AI read the replies on ${intents.size} threads`);
+
     for (const pr of prs) {
       // One diff per distinct commented commit, not per comment.
       const diffs = new Map<string, ChangedLines | null>();
@@ -46,7 +54,7 @@ export async function run(
         } else {
           changes = null;
         }
-        classified.push(classify(finding, changes, config));
+        classified.push(classify(finding, changes, config, intents.get(finding.commentId)));
       }
     }
     records.push(...prs);

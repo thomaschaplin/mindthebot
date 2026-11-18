@@ -30,6 +30,15 @@ inputs:
   issue-repo:
     description: Repo to post the issue in. Defaults to the current repo.
     required: false
+  ai:
+    description: Use Claude to read what human replies to AI comments mean, instead of matching phrases. Sends comment and reply text to Anthropic.
+    default: "false"
+  anthropic-api-key:
+    description: Anthropic API key, required when ai is true. Pass it from a secret.
+    required: false
+  ai-model:
+    description: Claude model used when ai is true.
+    default: claude-opus-5-5
   markdown-path:
     description: Where to write the markdown report.
     default: mindthebot.md

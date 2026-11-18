@@ -72,6 +72,8 @@ npx mindthebot --repo owner/name --datadog             # also send gauges to Dat
 | `--out` | stdout | write to a file |
 | `--datadog` | off | DogStatsD gauges such as `mindthebot.addressed_rate{bot,repo}`; needs `hot-shots` and a Datadog agent. No comment text is sent. |
 | `--no-cache` | cache on | API responses are cached in `.mindthebot/cache/` |
+| `--ai` | off | Use Claude to read what human replies mean (fixed, will fix, disagrees, acknowledged, question) instead of matching phrases. Needs `ANTHROPIC_API_KEY`. Only threads with a human reply are sent, and only the comment and reply text. See [docs/heuristics.md](docs/heuristics.md#with---ai). |
+| `--ai-model` | `claude-opus-5-5` | Claude model for `--ai` |
 
 ### Reviewers it knows about
 
@@ -113,6 +115,9 @@ jobs:
 | `issue-title` | `Mind the bot` | an open issue with this title and the `mindthebot` label is updated instead of creating a new one |
 | `issue-repo` | current repo | where to post the issue |
 | `github-token` | `${{ github.token }}` | use a PAT or GitHub App token to read other private repos |
+| `ai` | `false` | read replies with Claude, as `--ai` |
+| `anthropic-api-key` | – | required with `ai: true`; pass it from a secret |
+| `ai-model` | `claude-opus-5-5` | Claude model for `ai` |
 
 Outputs: `markdown-path`, `json-path`, `findings`, `by-bot` (JSON of per-reviewer rates, handy for alerting in a later step) and `issue-url`. The full JSON report is written to `mindthebot.json`, so you can upload it with `actions/upload-artifact`.
 
@@ -134,6 +139,8 @@ npm run check-dist  # rebuild and fail if the committed Action bundle is out of 
 - [x] GitHub Action: a weekly report as a job summary or an issue
 - [x] Score issues listed in summary comments, with a severity breakdown
 - [ ] A 30-finding hand-labelled agreement check, with the rate published here
+- [x] Read reply intent with Claude (`--ai`)
+- [ ] Judge whether a nearby change actually fixed the comment, with Claude
 - [ ] Group findings by category (bug, security, style)
 - [ ] Pair with an eval harness of planted bugs, to measure what reviewers *miss*, not just what they say
 

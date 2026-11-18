@@ -1,5 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import * as core from "@actions/core";
+import Anthropic from "@anthropic-ai/sdk";
+import { ClaudeReplyJudge, DEFAULT_AI_MODEL } from "./ai/reply-intent.ts";
 import { Cache } from "./collect/cache.ts";
 import { createClient, splitRepo } from "./collect/github.ts";
 import { loadConfig } from "./config.ts";
@@ -28,10 +30,24 @@ async function main(): Promise<void> {
   const config = await loadConfig(core.getInput("config") || undefined);
   const client = createClient(token);
 
-  const ledger = await run(client, new Cache(".mindthebot/cache", false), config, {
+  const cache = new Cache(".mindthebot/cache", false);
+  let replyJudge: ClaudeReplyJudge | undefined;
+  if (core.getBooleanInput("ai")) {
+    const apiKey = core.getInput("anthropic-api-key");
+    if (!apiKey) throw new Error("ai: true needs the anthropic-api-key input.");
+    core.setSecret(apiKey);
+    replyJudge = new ClaudeReplyJudge({
+      cache,
+      model: core.getInput("ai-model") || DEFAULT_AI_MODEL,
+      client: new Anthropic({ apiKey }),
+      warn: (m) => core.warning(m),
+    });
+  }
+  const ledger = await run(client, cache, config, {
     repos,
     since,
     maxPrs,
+    replyJudge,
     log: (m) => core.info(m),
   });
   const markdown = renderMarkdown(ledger);

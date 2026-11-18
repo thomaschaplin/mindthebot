@@ -1,3 +1,5 @@
+import type { ReplyIntent } from "./ai/reply-intent.ts";
+
 /** A human reply in a review thread, after the bot's opening comment. */
 export interface Reply {
   author: string;
@@ -81,4 +83,6 @@ export interface ClassifiedFinding extends Finding {
   outcome: Outcome;
   /** Which rule decided the outcome, for transparency and manual checks. */
   reason: string;
+  /** With --ai: what the model read the human replies as. */
+  replyIntent?: ReplyIntent;
 }

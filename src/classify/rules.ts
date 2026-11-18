@@ -1,4 +1,5 @@
 import type { Config } from "../config.ts";
+import type { ReplyIntent } from "../ai/reply-intent.ts";
 import type { ChangedLines, ClassifiedFinding, Finding } from "../types.ts";
 import { isNear } from "./patch.ts";
 
@@ -41,16 +42,23 @@ export function repliesMatch(finding: Finding, phrases: string[]): boolean {
  * resolution, so they are either addressed by rule 1 or "not-addressed".
  *
  * `changes` is undefined when no diff was needed, and null when one couldn't be fetched.
+ *
+ * `intent`, when given (the --ai mode), replaces the phrase lists: "fixed" counts as a
+ * fixed reply and "disagrees" as a dismissal; the other labels fall through to
+ * acknowledged. The model's label and reason are added to the finding's reason.
  */
 export function classify(
   finding: Finding,
   changes: ChangedLines | null | undefined,
   config: Config,
+  intent?: ReplyIntent | null,
 ): ClassifiedFinding {
+  const ai = intent ? ` (AI read the replies as "${intent.intent}": ${intent.reason})` : "";
   const result = (outcome: ClassifiedFinding["outcome"], reason: string): ClassifiedFinding => ({
     ...finding,
     outcome,
-    reason,
+    reason: `${reason}${ai}`,
+    ...(intent ? { replyIntent: intent } : {}),
   });
 
   const fileLines = finding.path && changes ? changes[resolvePath(finding.path, changes)] : undefined;
@@ -60,8 +68,8 @@ export function classify(
     finding.line !== null &&
     isNear(fileLines, finding.line, config.proximity, finding.endLine);
 
-  const saidDismissed = repliesMatch(finding, config.dismissedPhrases);
-  const saidFixed = repliesMatch(finding, config.addressedPhrases);
+  const saidDismissed = intent ? intent.intent === "disagrees" : repliesMatch(finding, config.dismissedPhrases);
+  const saidFixed = intent ? intent.intent === "fixed" : repliesMatch(finding, config.addressedPhrases);
   if (saidDismissed && !saidFixed) return result("dismissed", "reply dismisses the finding");
 
   if (nearbyChange) {

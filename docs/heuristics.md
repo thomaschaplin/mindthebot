@@ -48,6 +48,12 @@ The first rule that matches wins.
 | 8 | ignored | None of the above: no reply, reaction, resolution or nearby change. |
 | – | not-addressed | Summary items only: rule 1 didn't match. |
 
+### With `--ai`
+
+The phrase lists in rules 0, 2 and 4 only catch the wording they list. With `--ai`, Claude reads each thread that has a human reply and labels what the replies mean: **fixed**, **will-fix**, **disagrees**, **acknowledged**, **question** or **unclear**. The rules then use that label instead of the phrases: "fixed" counts as a fixed reply, "disagrees" as a dismissal, and the rest fall through to acknowledged. Everything else is unchanged: a nearby change still counts as addressed, and threads with no replies never go to the model.
+
+Each finding the model read records its label and a one-line reason in `replyIntent`, and the reason is added to the finding's `reason`. Answers are cached by comment, replies and model, so a re-run only pays for new threads. If a request fails or the model declines, that finding falls back to the phrase lists, with a warning.
+
 Each classified finding in the JSON output carries a `reason` field saying which rule matched, so you can audit any number.
 
 ### Changed lines
