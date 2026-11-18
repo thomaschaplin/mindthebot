@@ -12,7 +12,8 @@ export { DEFAULT_AI_MODEL };
  * - fixed:        says it's been fixed in this PR, or that the fix is going into this PR's next push
  * - will-fix:     agrees and plans to fix it outside this PR ("follow-up PR", "tracked in #12")
  * - disagrees:    rejects it: false positive, intentional, out of scope, won't fix
- * - acknowledged: accepts or confirms it, with no commitment either way ("confirmed, leaving open")
+ * - acknowledged: accepts or confirms it, with no commitment either way ("confirmed, leaving open"),
+ *                 or keeps the code as it is but documents the limitation instead
  * - question:     asks the reviewer or the author something, or discusses without a decision
  * - unclear:      none of the above can be told from the text
  */
@@ -46,10 +47,12 @@ const SYSTEM_PROMPT = `You label how people responded to an AI code reviewer's c
 You get the reviewer's comment and the human replies in its thread, oldest first. Decide what the replies, taken together, say happened to the comment. The latest decision wins: if someone first asks a question and later says it's fixed, the answer is "fixed".
 
 Labels:
-- fixed: a reply says the issue was fixed or the code was changed for it in this pull request, including a fix the author says is in, or about to go into, this PR's next push or commit ("fixing this in the next push", "the commit I'm about to push does X").
+- fixed: a reply says the issue was fixed or the code was changed to resolve it in this pull request, including a fix the author says is in, or about to go into, this PR's next push or commit ("fixing this in the next push", "the commit I'm about to push does X").
 - will-fix: a reply agrees and commits to fixing it outside this pull request: a follow-up PR, an issue, a later release.
-- disagrees: a reply rejects the comment: false positive, intentional, by design, out of scope, won't fix, not worth it.
-- acknowledged: a reply accepts or confirms the point without saying it was fixed, will be fixed, or won't be ("confirmed", "good point", "leaving this open for the author").
+- disagrees: a reply rejects the comment and leaves it at that: false positive, intentional, by design, out of scope, won't fix, not worth it.
+- acknowledged: a reply accepts or confirms the point without saying it was fixed, will be fixed, or won't be ("confirmed", "good point", "leaving this open for the author"). Also use this when the code is kept as it is but the limitation the comment describes is documented instead ("kept, and documented in security.md", "documented rather than fixed"): the issue was recognised and recorded, but it still exists.
+
+Documentation counts as "fixed" only when documentation was the whole of what the comment asked for, such as a comment about a missing or wrong doc. If the comment pointed at a problem in the code and the reply documents it rather than changing the code, that is "acknowledged".
 - question: the replies only ask questions or discuss, with no decision.
 - unclear: the replies don't say enough to tell.
 
@@ -86,7 +89,7 @@ export class ClaudeReplyJudge implements ReplyJudge {
   async judge(finding: Finding): Promise<ReplyIntent | null> {
     if (finding.replies.length === 0) return null;
     const prompt = replyPrompt(finding);
-    const key = ["reply-intent-v2", this.model, SYSTEM_PROMPT, prompt];
+    const key = ["reply-intent-v3", this.model, SYSTEM_PROMPT, prompt];
     try {
       return await this.cache.wrap(key, () => {
         this.calls += 1;
