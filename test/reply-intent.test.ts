@@ -107,7 +107,8 @@ describe("ClaudeReplyJudge", async () => {
     expect(await judge.judge(finding)).toEqual({ intent: "will-fix", reason: "Follow-up PR promised.", model: "claude-opus-5-5" });
     expect(await judge.judge(finding)).toEqual({ intent: "will-fix", reason: "Follow-up PR promised.", model: "claude-opus-5-5" });
     expect(judge.calls).toBe(1);
-    expect(requests[0]).toMatchObject({ model: "claude-opus-5-5", fallbacks: "default", output_config: { effort: "low" } });
+    expect(requests[0]).toMatchObject({ model: "claude-haiku-5-5", output_config: { effort: "low" } });
+    expect(requests[0]).not.toHaveProperty("fallbacks");
   });
 
   it("skips findings with no replies", async () => {

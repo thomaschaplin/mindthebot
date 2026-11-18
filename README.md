@@ -73,7 +73,7 @@ npx mindthebot --repo owner/name --datadog             # also send gauges to Dat
 | `--datadog` | off | DogStatsD gauges such as `mindthebot.addressed_rate{bot,repo}`; needs `hot-shots` and a Datadog agent. No comment text is sent. |
 | `--no-cache` | cache on | API responses are cached in `.mindthebot/cache/` |
 | `--ai` | off | Use Claude to read what human replies mean (fixed, will fix, disagrees, acknowledged, question) instead of matching phrases, and to check whether each nearby change actually fixed the finding. Needs `ANTHROPIC_API_KEY`. Sends the comment, human replies and nearby diff hunks, nothing else. See [docs/heuristics.md](docs/heuristics.md#with---ai). |
-| `--ai-model` | `claude-opus-5-5` | Claude model for `--ai` |
+| `--ai-model` | `claude-haiku-5-5` | Claude model for `--ai`. Haiku keeps costs low; `claude-opus-5-5` gives the most careful fix verdicts |
 
 ### Reviewers it knows about
 
@@ -117,7 +117,7 @@ jobs:
 | `github-token` | `${{ github.token }}` | use a PAT or GitHub App token to read other private repos |
 | `ai` | `false` | read replies and check fixes with Claude, as `--ai` |
 | `anthropic-api-key` | – | required with `ai: true`; pass it from a secret |
-| `ai-model` | `claude-opus-5-5` | Claude model for `ai` |
+| `ai-model` | `claude-haiku-5-5` | Claude model for `ai` |
 
 Outputs: `markdown-path`, `json-path`, `findings`, `by-bot` (JSON of per-reviewer rates, handy for alerting in a later step) and `issue-url`. The full JSON report is written to `mindthebot.json`, so you can upload it with `actions/upload-artifact`.
 

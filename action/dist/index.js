@@ -77490,13 +77490,13 @@ ${formattedIssues}${suffix}`);
 }
 
 // src/ai/claude.ts
-var DEFAULT_AI_MODEL = "claude-opus-5-5";
+var DEFAULT_AI_MODEL = "claude-haiku-5-5";
+var supportsFallbacks = (model) => !model.startsWith("claude-haiku");
 async function askClaude(client, options) {
   const response = await client.beta.messages.parse({
     model: options.model,
     max_tokens: 8192,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+    ...supportsFallbacks(options.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {},
     output_config: { effort: options.effort, format: zodOutputFormat(options.schema) },
     system: options.system,
     messages: [{ role: "user", content: options.prompt }]

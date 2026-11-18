@@ -124,7 +124,15 @@ describe("ClaudeFixJudge", async () => {
     expect(await judge.judge(makeFinding(), [PATCH])).toEqual(expected);
     expect(await judge.judge(makeFinding(), [PATCH])).toEqual(expected);
     expect(judge.calls).toBe(1);
-    expect(requests[0]).toMatchObject({ fallbacks: "default", output_config: { effort: "medium" } });
+    expect(requests[0]).toMatchObject({ model: "claude-haiku-5-5", output_config: { effort: "medium" } });
+    expect(requests[0]).not.toHaveProperty("fallbacks");
+  });
+
+  it("sends server-side fallbacks for models that support them", async () => {
+    const { client, requests } = fakeClient({ verdict: "fixed", reason: "ok" });
+    const judge = new ClaudeFixJudge({ cache: new Cache(cacheDir, false), client, model: "claude-opus-5-5" });
+    await judge.judge(makeFinding({ commentId: 11 }), [PATCH]);
+    expect(requests[0]).toMatchObject({ model: "claude-opus-5-5", fallbacks: "default", betas: ["server-side-fallback-2026-07-01"] });
   });
 
   it("doesn't call Claude when no hunk is near the line", async () => {
