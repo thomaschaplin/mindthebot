@@ -54,11 +54,29 @@ describe("patchesFor", () => {
 });
 
 describe("fixPrompt", () => {
-  it("includes the comment and the nearby hunks", () => {
+  it("puts the nearby hunks first and the rest of the file's changes after", () => {
     const prompt = fixPrompt(makeFinding(), [PATCH])!;
     expect(prompt).toContain('<review_comment reviewer="Claude" path="src/users.ts" lines="40">');
-    expect(prompt).toContain("+  if (!user) return null;");
-    expect(prompt).not.toContain("return x + 1");
+    const near = prompt.slice(prompt.indexOf("<changes_near_comment"), prompt.indexOf("</changes_near_comment>"));
+    const other = prompt.slice(prompt.indexOf("<other_changes_to_file"), prompt.indexOf("</other_changes_to_file>"));
+    expect(near).toContain("+  if (!user) return null;");
+    expect(near).not.toContain("return x + 1");
+    expect(other).toContain("+return x + 1;");
+    expect(other).not.toContain("if (!user)");
+  });
+
+  it("includes changes from every later patch, and leaves the other section out when there are none", () => {
+    const later = "@@ -90,1 +90,1 @@\n-old\n+new";
+    expect(fixPrompt(makeFinding(), [PATCH, later])).toContain("+new");
+    const onlyNear = "@@ -40,1 +40,1 @@\n-a\n+b";
+    expect(fixPrompt(makeFinding(), [onlyNear])).not.toContain("<other_changes_to_file");
+  });
+
+  it("caps very long diffs by whole hunks and says how many were left out", () => {
+    const many = Array.from({ length: 400 }, (_, i) => `@@ -${200 + i * 5},1 +${200 + i * 5},1 @@\n-line ${i} ${"x".repeat(40)}\n+line ${i}`).join("\n");
+    const prompt = fixPrompt(makeFinding(), [PATCH, many])!;
+    expect(prompt).toMatch(/\[\d+ more hunks not shown\]/);
+    expect(prompt.length).toBeLessThan(20000);
   });
 
   it("is null when nothing changed near the line", () => {
@@ -89,8 +107,14 @@ describe("classify with an AI fix verdict", () => {
     expect(classify(finding, changes, defaultConfig, null, verdict("unrelated")).outcome).toBe("addressed");
   });
 
-  it("an unrelated change on a resolved thread is a dismissal", () => {
-    expect(classify(makeFinding({ isResolved: true }), changes, defaultConfig, null, verdict("unrelated")).outcome).toBe("dismissed");
+  it("an unrelated change on a resolved thread is acknowledged, not dismissed: the fix may be in another file", () => {
+    const result = classify(makeFinding({ isResolved: true }), changes, defaultConfig, null, verdict("unrelated"));
+    expect(result.outcome).toBe("acknowledged");
+    expect(result.reason).toMatch(/another file/);
+  });
+
+  it("a resolved thread with no nearby change at all is still a dismissal", () => {
+    expect(classify(makeFinding({ isResolved: true }), {}, defaultConfig).outcome).toBe("dismissed");
   });
 
   it("a summary item with an unrelated change is not addressed", () => {

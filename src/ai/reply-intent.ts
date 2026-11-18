@@ -9,8 +9,8 @@ export { DEFAULT_AI_MODEL };
 /**
  * What the people who replied to an AI review comment meant, as a whole thread.
  *
- * - fixed:        says it's been fixed or changed ("done", "updated in abc123")
- * - will-fix:     agrees and plans to fix it later or elsewhere ("follow-up PR", "tracked in #12")
+ * - fixed:        says it's been fixed in this PR, or that the fix is going into this PR's next push
+ * - will-fix:     agrees and plans to fix it outside this PR ("follow-up PR", "tracked in #12")
  * - disagrees:    rejects it: false positive, intentional, out of scope, won't fix
  * - acknowledged: accepts or confirms it, with no commitment either way ("confirmed, leaving open")
  * - question:     asks the reviewer or the author something, or discusses without a decision
@@ -46,8 +46,8 @@ const SYSTEM_PROMPT = `You label how people responded to an AI code reviewer's c
 You get the reviewer's comment and the human replies in its thread, oldest first. Decide what the replies, taken together, say happened to the comment. The latest decision wins: if someone first asks a question and later says it's fixed, the answer is "fixed".
 
 Labels:
-- fixed: a reply says the issue was fixed or the code was changed for it.
-- will-fix: a reply agrees and commits to fixing it later or elsewhere (a follow-up PR, an issue, "will do").
+- fixed: a reply says the issue was fixed or the code was changed for it in this pull request, including a fix the author says is in, or about to go into, this PR's next push or commit ("fixing this in the next push", "the commit I'm about to push does X").
+- will-fix: a reply agrees and commits to fixing it outside this pull request: a follow-up PR, an issue, a later release.
 - disagrees: a reply rejects the comment: false positive, intentional, by design, out of scope, won't fix, not worth it.
 - acknowledged: a reply accepts or confirms the point without saying it was fixed, will be fixed, or won't be ("confirmed", "good point", "leaving this open for the author").
 - question: the replies only ask questions or discuss, with no decision.
@@ -86,7 +86,7 @@ export class ClaudeReplyJudge implements ReplyJudge {
   async judge(finding: Finding): Promise<ReplyIntent | null> {
     if (finding.replies.length === 0) return null;
     const prompt = replyPrompt(finding);
-    const key = ["reply-intent-v1", this.model, SYSTEM_PROMPT, prompt];
+    const key = ["reply-intent-v2", this.model, SYSTEM_PROMPT, prompt];
     try {
       return await this.cache.wrap(key, () => {
         this.calls += 1;

@@ -54,10 +54,11 @@ export function hasNearbyChange(finding: Finding, changes: ChangedLines | null |
  * fixed reply and "disagrees" as a dismissal; the other labels fall through to
  * acknowledged. The model's label and reason are added to the finding's reason.
  *
- * `fix`, when given (also --ai), is the model's verdict on the nearby change. "unrelated"
- * cancels rule 1, so the finding falls through to the rules below it; "fixed",
- * "partly" and "unclear" keep rule 1. A human reply saying it was fixed still
- * counts under rule 2.
+ * `fix`, when given (also --ai), is the model's verdict on the later changes to the
+ * file. "unrelated" cancels rule 1, so the finding falls through to the rules below
+ * it; "fixed", "partly" and "unclear" keep rule 1. A human reply saying it was fixed
+ * still counts under rule 2, and a resolved thread counts as acknowledged rather
+ * than dismissed, since the fix may be in another file.
  */
 export function classify(
   finding: Finding,
@@ -120,6 +121,11 @@ export function classify(
 
   if (finding.reactions.down > 0) return result("dismissed", "👎 reaction");
   if (saidDismissed) return result("dismissed", "reply dismisses the finding");
+  if (finding.isResolved && fix?.verdict === "unrelated") {
+    // Someone resolved it after changing the file. The AI found no fix in this file,
+    // but it may be in another one, so this isn't a dismissal.
+    return result("acknowledged", "thread resolved after changes the AI judged unrelated; the fix may be in another file");
+  }
   if (finding.isResolved) return result("dismissed", "thread resolved with no nearby code change");
 
   if (finding.replies.length > 0 || finding.reactions.up > 0) {

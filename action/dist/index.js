@@ -77540,31 +77540,47 @@ var VerdictSchema = external_exports.object({
 });
 var HUNK_MARGIN = 10;
 var MAX_COMMENT_CHARS = 4e3;
-var MAX_DIFF_CHARS = 8e3;
-var SYSTEM_PROMPT = `You check whether a code change dealt with an AI code reviewer's comment on a GitHub pull request.
+var MAX_NEAR_CHARS = 8e3;
+var MAX_OTHER_CHARS = 8e3;
+var SYSTEM_PROMPT = `You check whether code changes dealt with an AI code reviewer's comment on a GitHub pull request.
 
-You get the reviewer's comment, the file and line it was about, and the diff hunks made near that line after the comment (in unified diff format; "-" lines are the code the reviewer saw, "+" lines are what replaced it).
+You get the reviewer's comment, the file and line it was about, and every change made to that file after the comment, in unified diff format ("-" lines are the code the reviewer saw, "+" lines are what replaced it). Changes near the commented line come first; other changes to the same file follow, because a fix often lands elsewhere in the file, such as in a helper the commented code calls.
 
-Decide what the change did about the comment:
-- fixed: the change resolves the issue the comment raised, whether or not it follows the reviewer's suggested fix.
-- partly: the change addresses part of the issue, or only some of the cases the comment described.
-- unrelated: the change near the comment does something else and leaves the issue as it was.
-- unclear: the hunks don't show enough to tell, for example the fix depends on code outside them.
+Decide what the changes did about the comment:
+- fixed: they resolve the issue the comment raised, whether or not they follow the reviewer's suggested fix.
+- partly: they address part of the issue, or only some of the cases the comment described.
+- unrelated: none of the changes to this file deal with the issue; it is left as it was in this file.
+- unclear: the changes don't show enough to tell, for example the fix depends on code in another file.
 
 Judge from the code, not from how confident the comment sounds. A comment can be wrong; if the code was changed to resolve what it described, that still counts as fixed. Give a reason of at most 25 words.`;
+function joinHunks(hunks, max) {
+  const kept = [];
+  let size = 0;
+  for (const hunk of hunks) {
+    if (kept.length > 0 && size + hunk.length > max) break;
+    kept.push(hunk.length > max ? clip(hunk, max) : hunk);
+    size += hunk.length;
+  }
+  const left = hunks.length - kept.length;
+  return left > 0 ? `${kept.join("\n")}
+[${left} more hunk${left === 1 ? "" : "s"} not shown]` : kept.join("\n");
+}
 function fixPrompt(finding, patches) {
   if (!finding.path || !finding.line) return null;
-  const hunks = patches.flatMap((p) => hunksNear(p, finding.line, finding.endLine, HUNK_MARGIN));
-  if (hunks.length === 0) return null;
+  const near = patches.flatMap((p) => hunksNear(p, finding.line, finding.endLine, HUNK_MARGIN));
+  if (near.length === 0) return null;
+  const nearSet = new Set(near);
+  const other = patches.flatMap((p) => hunksNear(p, 1, null, Number.MAX_SAFE_INTEGER)).filter((h) => !nearSet.has(h));
   const lines = finding.endLine && finding.endLine !== finding.line ? `${finding.line}-${finding.endLine}` : `${finding.line}`;
   return [
     `<review_comment reviewer="${finding.bot}" path="${finding.path}" lines="${lines}">`,
     clip(finding.body, MAX_COMMENT_CHARS),
     "</review_comment>",
     "",
-    `<diff_after_comment path="${finding.path}">`,
-    clip(hunks.join("\n"), MAX_DIFF_CHARS),
-    "</diff_after_comment>"
+    `<changes_near_comment path="${finding.path}">`,
+    joinHunks(near, MAX_NEAR_CHARS),
+    "</changes_near_comment>",
+    ...other.length > 0 ? ["", `<other_changes_to_file path="${finding.path}">`, joinHunks(other, MAX_OTHER_CHARS), "</other_changes_to_file>"] : []
   ].join("\n");
 }
 var ClaudeFixJudge = class {
@@ -77584,7 +77600,7 @@ var ClaudeFixJudge = class {
   async judge(finding, patches) {
     const prompt = fixPrompt(finding, patches);
     if (!prompt) return null;
-    const key = ["fix-judge-v1", this.model, SYSTEM_PROMPT, prompt];
+    const key = ["fix-judge-v2", this.model, SYSTEM_PROMPT, prompt];
     try {
       return await this.cache.wrap(key, () => {
         this.calls += 1;
@@ -77612,8 +77628,8 @@ var SYSTEM_PROMPT2 = `You label how people responded to an AI code reviewer's co
 You get the reviewer's comment and the human replies in its thread, oldest first. Decide what the replies, taken together, say happened to the comment. The latest decision wins: if someone first asks a question and later says it's fixed, the answer is "fixed".
 
 Labels:
-- fixed: a reply says the issue was fixed or the code was changed for it.
-- will-fix: a reply agrees and commits to fixing it later or elsewhere (a follow-up PR, an issue, "will do").
+- fixed: a reply says the issue was fixed or the code was changed for it in this pull request, including a fix the author says is in, or about to go into, this PR's next push or commit ("fixing this in the next push", "the commit I'm about to push does X").
+- will-fix: a reply agrees and commits to fixing it outside this pull request: a follow-up PR, an issue, a later release.
 - disagrees: a reply rejects the comment: false positive, intentional, by design, out of scope, won't fix, not worth it.
 - acknowledged: a reply accepts or confirms the point without saying it was fixed, will be fixed, or won't be ("confirmed", "good point", "leaving this open for the author").
 - question: the replies only ask questions or discuss, with no decision.
@@ -77647,7 +77663,7 @@ var ClaudeReplyJudge = class {
   async judge(finding) {
     if (finding.replies.length === 0) return null;
     const prompt = replyPrompt(finding);
-    const key = ["reply-intent-v1", this.model, SYSTEM_PROMPT2, prompt];
+    const key = ["reply-intent-v2", this.model, SYSTEM_PROMPT2, prompt];
     try {
       return await this.cache.wrap(key, () => {
         this.calls += 1;
@@ -80138,6 +80154,9 @@ function classify(finding, changes, config2, intent, fix) {
   }
   if (finding.reactions.down > 0) return result("dismissed", "\u{1F44E} reaction");
   if (saidDismissed) return result("dismissed", "reply dismisses the finding");
+  if (finding.isResolved && fix?.verdict === "unrelated") {
+    return result("acknowledged", "thread resolved after changes the AI judged unrelated; the fix may be in another file");
+  }
   if (finding.isResolved) return result("dismissed", "thread resolved with no nearby code change");
   if (finding.replies.length > 0 || finding.reactions.up > 0) {
     return result(
