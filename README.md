@@ -1,6 +1,6 @@
-# Mind the bot
+<h1 align="center"><img src="docs/logo.png" alt="Mind the bot" width="320"></h1>
 
-**Does your team act on what its AI code reviewers say?**
+<p align="center"><b>Does your team act on what its AI code reviewers say?</b></p>
 
 AI reviewers like Claude, Greptile, Copilot and CodeRabbit now comment on most pull requests. `mindthebot` tells you how many of those comments led to a fix, how many were pushed back on, and how many nobody looked at.
 
