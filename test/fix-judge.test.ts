@@ -148,8 +148,7 @@ describe("ClaudeFixJudge", async () => {
     expect(await judge.judge(makeFinding(), [PATCH])).toEqual(expected);
     expect(await judge.judge(makeFinding(), [PATCH])).toEqual(expected);
     expect(judge.calls).toBe(1);
-    expect(requests[0]).toMatchObject({ model: "claude-haiku-5-5", output_config: { effort: "medium" } });
-    expect(requests[0]).not.toHaveProperty("fallbacks");
+    expect(requests[0]).toMatchObject({ model: "claude-sonnet-5-5", fallbacks: "default", output_config: { effort: "medium" } });
   });
 
   it("sends server-side fallbacks for models that support them", async () => {

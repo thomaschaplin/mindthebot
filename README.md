@@ -73,14 +73,14 @@ npx mindthebot --repo owner/name --datadog             # also send gauges to Dat
 | `--datadog` | off | DogStatsD gauges such as `mindthebot.addressed_rate{bot,repo}`; needs `hot-shots` and a Datadog agent. No comment text is sent. |
 | `--no-cache` | cache on | API responses are cached in `.mindthebot/cache/` |
 | `--ai` | off | Use Claude to read what human replies mean (fixed, will fix, disagrees, acknowledged, question) instead of matching phrases, and to check whether each nearby change actually fixed the finding. Needs `ANTHROPIC_API_KEY`. Sends the comment, human replies and nearby diff hunks, nothing else. See [docs/heuristics.md](docs/heuristics.md#with---ai). |
-| `--ai-model` | `haiku` | Claude model for `--ai`: `haiku`, `sonnet`, `opus` or `fable` (the newest of each), or a full model ID. See [Choosing a model](#choosing-a-model-for---ai) |
+| `--ai-model` | `sonnet` | Claude model for `--ai`: `haiku`, `sonnet`, `opus` or `fable` (the newest of each), or a full model ID. See [Choosing a model](#choosing-a-model-for---ai) |
 
 ### Choosing a model for `--ai`
 
 | `--ai-model` | Model | Price per million tokens (in / out) | Use it for |
 |---|---|---|---|
-| `haiku` (default) | Claude Haiku 5.5 | $0.10 / $0.50 | trying `--ai` out, and large backfills |
-| `sonnet` | Claude Sonnet 5.5 | $2 / $10 | a good balance for regular weekly runs |
+| `haiku` | Claude Haiku 5.5 | $0.10 / $0.50 | cheap iteration while tuning; its labels sometimes contradict its own reasoning |
+| `sonnet` (default) | Claude Sonnet 5.5 | $2 / $10 | regular runs: consistent labels, and says "unclear" rather than guessing |
 | `opus` | Claude Opus 5.5 | $4 / $20 | the most careful fix verdicts at a moderate price |
 | `fable` | Claude Fable 5.2 | $8 / $40 | the hardest code, when cost matters least |
 
@@ -128,7 +128,7 @@ jobs:
 | `github-token` | `${{ github.token }}` | use a PAT or GitHub App token to read other private repos |
 | `ai` | `false` | read replies and check fixes with Claude, as `--ai` |
 | `anthropic-api-key` | – | required with `ai: true`; pass it from a secret |
-| `ai-model` | `haiku` | Claude model for `ai`, as `--ai-model` |
+| `ai-model` | `sonnet` | Claude model for `ai`, as `--ai-model` |
 
 Outputs: `markdown-path`, `json-path`, `findings`, `by-bot` (JSON of per-reviewer rates, handy for alerting in a later step) and `issue-url`. The full JSON report is written to `mindthebot.json`, so you can upload it with `actions/upload-artifact`.
 

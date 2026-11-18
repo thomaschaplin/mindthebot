@@ -77496,7 +77496,7 @@ var AI_MODELS = {
   opus: "claude-opus-5-5",
   fable: "claude-fable-5-2"
 };
-var DEFAULT_AI_MODEL = "haiku";
+var DEFAULT_AI_MODEL = "sonnet";
 function resolveModel(name) {
   const key = name.trim().toLowerCase();
   if (key in AI_MODELS) return AI_MODELS[key];

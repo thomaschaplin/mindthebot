@@ -11,8 +11,12 @@ export const AI_MODELS = {
 } as const;
 export type AiModelAlias = keyof typeof AI_MODELS;
 
-/** Haiku while --ai is being tested: it costs a fraction of the others. */
-export const DEFAULT_AI_MODEL: AiModelAlias = "haiku";
+/**
+ * Sonnet: in side-by-side runs its labels matched its own reasoning, and it
+ * said "unclear" rather than guessing when the deciding code wasn't in the diff.
+ * Haiku was cheaper but sometimes picked a label its reason argued against.
+ */
+export const DEFAULT_AI_MODEL: AiModelAlias = "sonnet";
 
 /** An alias (haiku, sonnet, opus, fable) or a full Claude model ID, as the API takes it. */
 export function resolveModel(name: string): string {
