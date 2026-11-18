@@ -2,7 +2,8 @@ import { writeFile } from "node:fs/promises";
 import * as core from "@actions/core";
 import Anthropic from "@anthropic-ai/sdk";
 import { ClaudeFixJudge } from "./ai/fix-judge.ts";
-import { ClaudeReplyJudge, DEFAULT_AI_MODEL } from "./ai/reply-intent.ts";
+import { DEFAULT_AI_MODEL, resolveModel } from "./ai/claude.ts";
+import { ClaudeReplyJudge } from "./ai/reply-intent.ts";
 import { Cache } from "./collect/cache.ts";
 import { createClient, splitRepo } from "./collect/github.ts";
 import { loadConfig } from "./config.ts";
@@ -40,10 +41,11 @@ async function main(): Promise<void> {
     core.setSecret(apiKey);
     const ai = {
       cache,
-      model: core.getInput("ai-model") || DEFAULT_AI_MODEL,
+      model: resolveModel(core.getInput("ai-model") || DEFAULT_AI_MODEL),
       client: new Anthropic({ apiKey }),
       warn: (m: string) => core.warning(m),
     };
+    core.info(`AI: using ${ai.model}`);
     replyJudge = new ClaudeReplyJudge(ai);
     fixJudge = new ClaudeFixJudge(ai);
   }

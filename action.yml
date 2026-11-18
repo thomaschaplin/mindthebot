@@ -37,8 +37,8 @@ inputs:
     description: Anthropic API key, required when ai is true. Pass it from a secret.
     required: false
   ai-model:
-    description: Claude model used when ai is true. Haiku keeps costs low; claude-opus-5-5 gives the most careful fix verdicts.
-    default: claude-haiku-5-5
+    description: Claude model used when ai is true. haiku, sonnet, opus or fable (newest of each), or a full model ID. Haiku costs least; opus and fable give the most careful fix verdicts.
+    default: haiku
   markdown-path:
     description: Where to write the markdown report.
     default: mindthebot.md

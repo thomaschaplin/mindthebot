@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { Cache } from "../collect/cache.ts";
 import type { Finding } from "../types.ts";
-import { askClaude, clip, DEFAULT_AI_MODEL, describeError, eachLimited, isFatal } from "./claude.ts";
+import { askClaude, clip, DEFAULT_AI_MODEL, describeError, eachLimited, isFatal, resolveModel } from "./claude.ts";
 
 export { DEFAULT_AI_MODEL };
 
@@ -79,7 +79,7 @@ export class ClaudeReplyJudge implements ReplyJudge {
   constructor(options: { cache: Cache; model?: string; client?: Anthropic; warn?: (message: string) => void }) {
     this.client = options.client ?? new Anthropic();
     this.cache = options.cache;
-    this.model = options.model ?? DEFAULT_AI_MODEL;
+    this.model = resolveModel(options.model ?? DEFAULT_AI_MODEL);
     this.warn = options.warn ?? (() => {});
   }
 

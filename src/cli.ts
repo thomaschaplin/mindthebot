@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import { Command, InvalidArgumentError } from "commander";
 import { ClaudeFixJudge } from "./ai/fix-judge.ts";
-import { ClaudeReplyJudge, DEFAULT_AI_MODEL } from "./ai/reply-intent.ts";
+import { AI_MODELS, DEFAULT_AI_MODEL, resolveModel } from "./ai/claude.ts";
+import { ClaudeReplyJudge } from "./ai/reply-intent.ts";
 import { Cache } from "./collect/cache.ts";
 import { createClient, resolveToken, splitRepo } from "./collect/github.ts";
 import { loadConfig } from "./config.ts";
@@ -30,7 +31,18 @@ const program = new Command()
   .option("--datadog", "also send metrics to Datadog through DogStatsD")
   .option("--no-cache", "don't read or write the .mindthebot/cache directory")
   .option("--ai", "use Claude to read what human replies mean and to check whether nearby changes fixed each finding (needs ANTHROPIC_API_KEY; sends comment text, replies and diff hunks to Anthropic)")
-  .option("--ai-model <model>", "Claude model for --ai", DEFAULT_AI_MODEL)
+  .option(
+    "--ai-model <model>",
+    `Claude model for --ai: ${Object.keys(AI_MODELS).join(", ")}, or a full model ID`,
+    (value: string) => {
+      try {
+        return resolveModel(value);
+      } catch (error) {
+        throw new InvalidArgumentError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    resolveModel(DEFAULT_AI_MODEL),
+  )
   .action(async (opts) => {
     if (opts.format !== "md" && opts.format !== "json") throw new InvalidArgumentError("--format must be md or json.");
     opts.repo.forEach(splitRepo);
@@ -40,6 +52,7 @@ const program = new Command()
     const client = createClient(resolveToken());
     const cache = new Cache(".mindthebot/cache", opts.cache);
     const log = (m: string) => process.stderr.write(`${m}\n`);
+    if (opts.ai) log(`AI: using ${opts.aiModel}`);
     const replyJudge = opts.ai ? new ClaudeReplyJudge({ cache, model: opts.aiModel, warn: log }) : undefined;
     const fixJudge = opts.ai ? new ClaudeFixJudge({ cache, model: opts.aiModel, warn: log }) : undefined;
     const ledger = await run(client, cache, config, {

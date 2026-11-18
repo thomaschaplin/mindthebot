@@ -3,7 +3,7 @@ import { z } from "zod";
 import { hunksNear } from "../classify/patch.ts";
 import type { Cache } from "../collect/cache.ts";
 import type { Finding } from "../types.ts";
-import { askClaude, clip, DEFAULT_AI_MODEL, describeError, isFatal } from "./claude.ts";
+import { askClaude, clip, DEFAULT_AI_MODEL, describeError, isFatal, resolveModel } from "./claude.ts";
 
 /**
  * Whether the code that changed near an AI review comment actually dealt with it.
@@ -82,7 +82,7 @@ export class ClaudeFixJudge implements FixJudge {
   constructor(options: { cache: Cache; model?: string; client?: Anthropic; warn?: (message: string) => void }) {
     this.client = options.client ?? new Anthropic();
     this.cache = options.cache;
-    this.model = options.model ?? DEFAULT_AI_MODEL;
+    this.model = resolveModel(options.model ?? DEFAULT_AI_MODEL);
     this.warn = options.warn ?? (() => {});
   }
 

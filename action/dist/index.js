@@ -77490,8 +77490,21 @@ ${formattedIssues}${suffix}`);
 }
 
 // src/ai/claude.ts
-var DEFAULT_AI_MODEL = "claude-haiku-5-5";
-var supportsFallbacks = (model) => !model.startsWith("claude-haiku");
+var AI_MODELS = {
+  haiku: "claude-haiku-5-5",
+  sonnet: "claude-sonnet-5-5",
+  opus: "claude-opus-5-5",
+  fable: "claude-fable-5-2"
+};
+var DEFAULT_AI_MODEL = "haiku";
+function resolveModel(name) {
+  const key = name.trim().toLowerCase();
+  if (key in AI_MODELS) return AI_MODELS[key];
+  if (/^claude-[a-z0-9-]+$/.test(key)) return key;
+  throw new Error(`Unknown model "${name}". Use ${Object.keys(AI_MODELS).join(", ")}, or a full Claude model ID.`);
+}
+var FALLBACK_MODELS = /* @__PURE__ */ new Set(["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-2", "claude-fable-5-1"]);
+var supportsFallbacks = (model) => FALLBACK_MODELS.has(model);
 async function askClaude(client, options) {
   const response = await client.beta.messages.parse({
     model: options.model,
@@ -77564,7 +77577,7 @@ var ClaudeFixJudge = class {
   constructor(options) {
     this.client = options.client ?? new Anthropic();
     this.cache = options.cache;
-    this.model = options.model ?? DEFAULT_AI_MODEL;
+    this.model = resolveModel(options.model ?? DEFAULT_AI_MODEL);
     this.warn = options.warn ?? (() => {
     });
   }
@@ -77627,7 +77640,7 @@ var ClaudeReplyJudge = class {
   constructor(options) {
     this.client = options.client ?? new Anthropic();
     this.cache = options.cache;
-    this.model = options.model ?? DEFAULT_AI_MODEL;
+    this.model = resolveModel(options.model ?? DEFAULT_AI_MODEL);
     this.warn = options.warn ?? (() => {
     });
   }
@@ -80616,10 +80629,11 @@ async function main() {
     setSecret(apiKey);
     const ai = {
       cache,
-      model: getInput("ai-model") || DEFAULT_AI_MODEL,
+      model: resolveModel(getInput("ai-model") || DEFAULT_AI_MODEL),
       client: new Anthropic({ apiKey }),
       warn: (m) => warning(m)
     };
+    info(`AI: using ${ai.model}`);
     replyJudge = new ClaudeReplyJudge(ai);
     fixJudge = new ClaudeFixJudge(ai);
   }
