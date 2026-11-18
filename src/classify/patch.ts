@@ -46,3 +46,24 @@ export function isNear(touched: number[], line: number, proximity: number, endLi
   const end = endLine ?? line;
   return touched.some((t) => t >= line - proximity && t <= end + proximity);
 }
+
+/**
+ * The hunks of a unified diff whose old-side range comes within `margin` lines
+ * of `line` (or the range `line`–`endLine`), with their @@ headers. This is
+ * the code change a reviewer's comment would have to explain.
+ */
+export function hunksNear(patch: string, line: number, endLine: number | null, margin: number): string[] {
+  const end = endLine ?? line;
+  const hunks: { start: number; length: number; text: string[] }[] = [];
+  for (const row of patch.split("\n")) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(row);
+    if (header) {
+      hunks.push({ start: Number(header[1]), length: header[2] === undefined ? 1 : Number(header[2]), text: [row] });
+    } else if (hunks.length > 0) {
+      hunks.at(-1)!.text.push(row);
+    }
+  }
+  return hunks
+    .filter((h) => h.start <= end + margin && h.start + Math.max(h.length, 1) - 1 >= line - margin)
+    .map((h) => h.text.join("\n"));
+}

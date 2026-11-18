@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { Command, InvalidArgumentError } from "commander";
+import { ClaudeFixJudge } from "./ai/fix-judge.ts";
 import { ClaudeReplyJudge, DEFAULT_AI_MODEL } from "./ai/reply-intent.ts";
 import { Cache } from "./collect/cache.ts";
 import { createClient, resolveToken, splitRepo } from "./collect/github.ts";
@@ -28,7 +29,7 @@ const program = new Command()
   .option("-o, --out <path>", "write the report to a file instead of stdout")
   .option("--datadog", "also send metrics to Datadog through DogStatsD")
   .option("--no-cache", "don't read or write the .mindthebot/cache directory")
-  .option("--ai", "use Claude to read what human replies mean, instead of matching phrases (needs ANTHROPIC_API_KEY; sends comment and reply text to Anthropic)")
+  .option("--ai", "use Claude to read what human replies mean and to check whether nearby changes fixed each finding (needs ANTHROPIC_API_KEY; sends comment text, replies and diff hunks to Anthropic)")
   .option("--ai-model <model>", "Claude model for --ai", DEFAULT_AI_MODEL)
   .action(async (opts) => {
     if (opts.format !== "md" && opts.format !== "json") throw new InvalidArgumentError("--format must be md or json.");
@@ -40,14 +41,19 @@ const program = new Command()
     const cache = new Cache(".mindthebot/cache", opts.cache);
     const log = (m: string) => process.stderr.write(`${m}\n`);
     const replyJudge = opts.ai ? new ClaudeReplyJudge({ cache, model: opts.aiModel, warn: log }) : undefined;
+    const fixJudge = opts.ai ? new ClaudeFixJudge({ cache, model: opts.aiModel, warn: log }) : undefined;
     const ledger = await run(client, cache, config, {
       repos: opts.repo,
       since: opts.since,
       maxPrs: opts.maxPrs,
       replyJudge,
+      fixJudge,
       log,
     });
-    if (replyJudge) log(`AI: ${replyJudge.calls} new Claude request${replyJudge.calls === 1 ? "" : "s"} (the rest came from the cache)`);
+    if (replyJudge && fixJudge) {
+      const calls = replyJudge.calls + fixJudge.calls;
+      log(`AI: ${calls} new Claude request${calls === 1 ? "" : "s"} (the rest came from the cache)`);
+    }
 
     const output = opts.format === "json" ? `${JSON.stringify(ledger, null, 2)}\n` : renderMarkdown(ledger);
     if (opts.out) {

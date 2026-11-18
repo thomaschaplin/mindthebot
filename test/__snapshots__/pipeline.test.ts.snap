@@ -120,6 +120,8 @@ Every comment an AI reviewer leaves on a file and line, and every file-and-line 
 - 💤 **Ignored**: no reply, reaction, resolution or nearby change. Summary items can't be replied to or resolved, so the full breakdown lists them separately as **not addressed**.
 - 🕸️ **Outdated**: GitHub marked the thread outdated, but no nearby change was found.
 
+With \`--ai\`, Claude also reads what human replies mean (instead of matching phrases), and checks each nearby change against the comment. A change it judges unrelated doesn't count as addressed.
+
 These are heuristics: a nearby change isn't proof the comment caused it, and a fix made in a later PR looks ignored. The JSON report records the rule behind every outcome.
 
 </details>

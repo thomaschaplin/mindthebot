@@ -52,7 +52,11 @@ The first rule that matches wins.
 
 The phrase lists in rules 0, 2 and 4 only catch the wording they list. With `--ai`, Claude reads each thread that has a human reply and labels what the replies mean: **fixed**, **will-fix**, **disagrees**, **acknowledged**, **question** or **unclear**. The rules then use that label instead of the phrases: "fixed" counts as a fixed reply, "disagrees" as a dismissal, and the rest fall through to acknowledged. Everything else is unchanged: a nearby change still counts as addressed, and threads with no replies never go to the model.
 
-Each finding the model read records its label and a one-line reason in `replyIntent`, and the reason is added to the finding's `reason`. Answers are cached by comment, replies and model, so a re-run only pays for new threads. If a request fails or the model declines, that finding falls back to the phrase lists, with a warning.
+Rule 1 ("code within 3 lines changed") is the weakest assumption: a nearby change isn't proof that it dealt with the comment. With `--ai`, every finding that rule 1 matches is also checked. Claude gets the comment and the diff hunks made within 10 lines of it after the comment, and judges the change **fixed**, **partly**, **unrelated** or **unclear**. An **unrelated** verdict cancels rule 1, so the finding falls through to the rules below it (a reply saying it was fixed, a resolution, acknowledged, ignored). The other verdicts keep it addressed. The report shows how many nearby changes were checked and how many were judged unrelated.
+
+Each finding the model looked at records its answers in `replyIntent` and `fixVerdict`, with a one-line reason that is also added to the finding's `reason`. Answers are cached by the text sent and the model, so a re-run only pays for new threads and changes. If a request fails or the model declines, that finding keeps the plain rules, with a warning. Missing credentials stop the run.
+
+What's sent to Anthropic: the comment text, human replies, and diff hunks near the comment. Nothing else from the repo.
 
 Each classified finding in the JSON output carries a `reason` field saying which rule matched, so you can audit any number.
 

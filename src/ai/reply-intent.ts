@@ -1,8 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import type { Cache } from "../collect/cache.ts";
 import type { Finding } from "../types.ts";
+import { askClaude, clip, DEFAULT_AI_MODEL, describeError, eachLimited, isFatal } from "./claude.ts";
+
+export { DEFAULT_AI_MODEL };
 
 /**
  * What the people who replied to an AI review comment meant, as a whole thread.
@@ -35,8 +37,6 @@ const IntentSchema = z.object({
   reason: z.string(),
 });
 
-export const DEFAULT_AI_MODEL = "claude-opus-5-5";
-
 /** Keep prompts small: the reviewer's comment rarely needs more than this to understand the replies. */
 const MAX_COMMENT_CHARS = 3000;
 const MAX_REPLY_CHARS = 1500;
@@ -54,8 +54,6 @@ Labels:
 - unclear: the replies don't say enough to tell.
 
 Judge only from the text. Don't guess whether the code changed. Give a reason of at most 20 words.`;
-
-const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n[…cut]` : text);
 
 /** The user message for one finding. Exported for tests. */
 export function replyPrompt(finding: Finding): string {
@@ -90,34 +88,15 @@ export class ClaudeReplyJudge implements ReplyJudge {
     const prompt = replyPrompt(finding);
     const key = ["reply-intent-v1", this.model, SYSTEM_PROMPT, prompt];
     try {
-      return await this.cache.wrap(key, () => this.ask(prompt));
+      return await this.cache.wrap(key, () => {
+        this.calls += 1;
+        return askClaude(this.client, { model: this.model, effort: "low", system: SYSTEM_PROMPT, prompt, schema: IntentSchema });
+      });
     } catch (error) {
-      // Missing or bad credentials affect every request: stop instead of warning for each thread.
-      const fatal =
-        error instanceof Anthropic.AuthenticationError ||
-        error instanceof Anthropic.PermissionDeniedError ||
-        (!(error instanceof Anthropic.APIError) && /authentication/i.test(String(error)));
-      if (fatal) throw new Error(`--ai can't reach Claude: ${error instanceof Error ? error.message : String(error)}`);
-      this.warn(`reply intent for ${finding.url} failed, using phrase rules: ${error instanceof Error ? error.message : String(error)}`);
+      if (isFatal(error)) throw new Error(`--ai can't reach Claude: ${describeError(error)}`);
+      this.warn(`reply intent for ${finding.url} failed, using phrase rules: ${describeError(error)}`);
       return null;
     }
-  }
-
-  private async ask(prompt: string): Promise<ReplyIntent> {
-    this.calls += 1;
-    const response = await this.client.beta.messages.parse({
-      model: this.model,
-      max_tokens: 4096,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: "low", format: zodOutputFormat(IntentSchema) },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: prompt }],
-    });
-    // Throw rather than return null, so a refusal or a bad parse isn't cached.
-    if (response.stop_reason === "refusal") throw new Error("the model declined");
-    if (!response.parsed_output) throw new Error(`no structured output (stop reason: ${response.stop_reason})`);
-    return { ...response.parsed_output, model: response.model };
   }
 }
 
@@ -128,13 +107,13 @@ export async function judgeReplies(
   concurrency = 4,
 ): Promise<Map<number, ReplyIntent>> {
   const results = new Map<number, ReplyIntent>();
-  const queue = findings.filter((f) => f.source === "inline" && f.replies.length > 0);
-  const worker = async () => {
-    for (let f = queue.shift(); f; f = queue.shift()) {
+  await eachLimited(
+    findings.filter((f) => f.source === "inline" && f.replies.length > 0),
+    concurrency,
+    async (f) => {
       const intent = await judge.judge(f);
       if (intent) results.set(f.commentId, intent);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+    },
+  );
   return results;
 }

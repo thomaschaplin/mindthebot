@@ -1,4 +1,5 @@
 import type { Config } from "../config.ts";
+import type { FixVerdict } from "../ai/fix-judge.ts";
 import type { ReplyIntent } from "../ai/reply-intent.ts";
 import type { ChangedLines, ClassifiedFinding, Finding } from "../types.ts";
 import { isNear } from "./patch.ts";
@@ -25,6 +26,12 @@ export function repliesMatch(finding: Finding, phrases: string[]): boolean {
   return finding.replies.some((r) => pattern.test(r.body));
 }
 
+/** True when code within `proximity` lines of the finding changed afterwards (rule 1, before any AI verdict). */
+export function hasNearbyChange(finding: Finding, changes: ChangedLines | null | undefined, config: Config): boolean {
+  const fileLines = finding.path && changes ? changes[resolvePath(finding.path, changes)] : undefined;
+  return Array.isArray(fileLines) && finding.line !== null && isNear(fileLines, finding.line, config.proximity, finding.endLine);
+}
+
 /**
  * Decide what happened to one AI finding. The first matching rule wins:
  *
@@ -46,19 +53,29 @@ export function repliesMatch(finding: Finding, phrases: string[]): boolean {
  * `intent`, when given (the --ai mode), replaces the phrase lists: "fixed" counts as a
  * fixed reply and "disagrees" as a dismissal; the other labels fall through to
  * acknowledged. The model's label and reason are added to the finding's reason.
+ *
+ * `fix`, when given (also --ai), is the model's verdict on the nearby change. "unrelated"
+ * cancels rule 1, so the finding falls through to the rules below it; "fixed",
+ * "partly" and "unclear" keep rule 1. A human reply saying it was fixed still
+ * counts under rule 2.
  */
 export function classify(
   finding: Finding,
   changes: ChangedLines | null | undefined,
   config: Config,
   intent?: ReplyIntent | null,
+  fix?: FixVerdict | null,
 ): ClassifiedFinding {
-  const ai = intent ? ` (AI read the replies as "${intent.intent}": ${intent.reason})` : "";
+  const notes = [
+    ...(intent ? [`AI read the replies as "${intent.intent}": ${intent.reason}`] : []),
+    ...(fix ? [`AI judged the nearby change "${fix.verdict}": ${fix.reason}`] : []),
+  ];
   const result = (outcome: ClassifiedFinding["outcome"], reason: string): ClassifiedFinding => ({
     ...finding,
     outcome,
-    reason: `${reason}${ai}`,
+    reason: notes.length > 0 ? `${reason} (${notes.join("; ")})` : reason,
     ...(intent ? { replyIntent: intent } : {}),
+    ...(fix ? { fixVerdict: fix } : {}),
   });
 
   const fileLines = finding.path && changes ? changes[resolvePath(finding.path, changes)] : undefined;
@@ -66,7 +83,8 @@ export function classify(
   const nearbyChange =
     Array.isArray(fileLines) &&
     finding.line !== null &&
-    isNear(fileLines, finding.line, config.proximity, finding.endLine);
+    isNear(fileLines, finding.line, config.proximity, finding.endLine) &&
+    fix?.verdict !== "unrelated";
 
   const saidDismissed = intent ? intent.intent === "disagrees" : repliesMatch(finding, config.dismissedPhrases);
   const saidFixed = intent ? intent.intent === "fixed" : repliesMatch(finding, config.addressedPhrases);

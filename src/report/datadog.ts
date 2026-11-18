@@ -26,6 +26,7 @@ export async function sendToDatadog(ledger: Ledger): Promise<void> {
     client.gauge("addressed_rate", s.addressedRate, tags);
     client.gauge("dismissed_rate", s.dismissedRate, tags);
     client.gauge("acknowledged_rate", s.acknowledgedRate, tags);
+    if (s.aiChecked > 0) client.gauge("ai_unrelated_changes", s.aiUnrelated, tags);
     client.gauge("ignored_rate", s.ignoredRate, tags);
     client.gauge("not_addressed_rate", s.notAddressedRate, tags);
     client.gauge("findings_per_pr", s.findingsPerPr, tags);

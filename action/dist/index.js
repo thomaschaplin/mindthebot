@@ -57684,11 +57684,8 @@ function info(message) {
 // src/action.ts
 init_sdk();
 
-// src/ai/reply-intent.ts
+// src/ai/fix-judge.ts
 init_sdk();
-
-// node_modules/@anthropic-ai/sdk/helpers/zod.mjs
-init_transform_json_schema();
 
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -77407,7 +77404,61 @@ function date4(params) {
   return _coercedDate(ZodDate, params);
 }
 
+// src/classify/patch.ts
+function touchedOldLines(patch) {
+  const touched = /* @__PURE__ */ new Set();
+  let oldLine = 0;
+  let inHunk = false;
+  let afterDeletion = false;
+  for (const line of patch.split("\n")) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
+    if (header) {
+      oldLine = Number(header[1]);
+      inHunk = true;
+      afterDeletion = false;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith("-")) {
+      touched.add(oldLine);
+      oldLine += 1;
+      afterDeletion = true;
+    } else if (line.startsWith("+")) {
+      if (!afterDeletion) {
+        touched.add(Math.max(oldLine - 1, 1));
+        touched.add(oldLine);
+      }
+    } else if (line.startsWith("\\")) {
+    } else {
+      oldLine += 1;
+      afterDeletion = false;
+    }
+  }
+  return [...touched].sort((a, b) => a - b);
+}
+function isNear(touched, line, proximity, endLine = null) {
+  const end = endLine ?? line;
+  return touched.some((t) => t >= line - proximity && t <= end + proximity);
+}
+function hunksNear(patch, line, endLine, margin) {
+  const end = endLine ?? line;
+  const hunks = [];
+  for (const row of patch.split("\n")) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(row);
+    if (header) {
+      hunks.push({ start: Number(header[1]), length: header[2] === void 0 ? 1 : Number(header[2]), text: [row] });
+    } else if (hunks.length > 0) {
+      hunks.at(-1).text.push(row);
+    }
+  }
+  return hunks.filter((h) => h.start <= end + margin && h.start + Math.max(h.length, 1) - 1 >= line - margin).map((h) => h.text.join("\n"));
+}
+
+// src/ai/claude.ts
+init_sdk();
+
 // node_modules/@anthropic-ai/sdk/helpers/zod.mjs
+init_transform_json_schema();
 init_error();
 function zodOutputFormat(zodObject) {
   const jsonSchema = transformJSONSchema(toJSONSchema(zodObject, { reused: "ref" }));
@@ -77438,16 +77489,112 @@ ${formattedIssues}${suffix}`);
   };
 }
 
+// src/ai/claude.ts
+var DEFAULT_AI_MODEL = "claude-opus-5-5";
+async function askClaude(client, options) {
+  const response = await client.beta.messages.parse({
+    model: options.model,
+    max_tokens: 8192,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: options.effort, format: zodOutputFormat(options.schema) },
+    system: options.system,
+    messages: [{ role: "user", content: options.prompt }]
+  });
+  if (response.stop_reason === "refusal") throw new Error("the model declined");
+  if (!response.parsed_output) throw new Error(`no structured output (stop reason: ${response.stop_reason})`);
+  return { ...response.parsed_output, model: response.model };
+}
+function isFatal(error63) {
+  return error63 instanceof Anthropic.AuthenticationError || error63 instanceof Anthropic.PermissionDeniedError || !(error63 instanceof Anthropic.APIError) && /authentication/i.test(String(error63));
+}
+var describeError = (error63) => error63 instanceof Error ? error63.message : String(error63);
+var clip = (text, max) => text.length > max ? `${text.slice(0, max)}
+[\u2026cut]` : text;
+async function eachLimited(items, concurrency, work) {
+  const queue = [...items];
+  const worker = async () => {
+    for (let item = queue.shift(); item !== void 0; item = queue.shift()) await work(item);
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+}
+
+// src/ai/fix-judge.ts
+var FIX_VERDICTS = ["fixed", "partly", "unrelated", "unclear"];
+var VerdictSchema = external_exports.object({
+  verdict: external_exports.enum(FIX_VERDICTS),
+  reason: external_exports.string()
+});
+var HUNK_MARGIN = 10;
+var MAX_COMMENT_CHARS = 4e3;
+var MAX_DIFF_CHARS = 8e3;
+var SYSTEM_PROMPT = `You check whether a code change dealt with an AI code reviewer's comment on a GitHub pull request.
+
+You get the reviewer's comment, the file and line it was about, and the diff hunks made near that line after the comment (in unified diff format; "-" lines are the code the reviewer saw, "+" lines are what replaced it).
+
+Decide what the change did about the comment:
+- fixed: the change resolves the issue the comment raised, whether or not it follows the reviewer's suggested fix.
+- partly: the change addresses part of the issue, or only some of the cases the comment described.
+- unrelated: the change near the comment does something else and leaves the issue as it was.
+- unclear: the hunks don't show enough to tell, for example the fix depends on code outside them.
+
+Judge from the code, not from how confident the comment sounds. A comment can be wrong; if the code was changed to resolve what it described, that still counts as fixed. Give a reason of at most 25 words.`;
+function fixPrompt(finding, patches) {
+  if (!finding.path || !finding.line) return null;
+  const hunks = patches.flatMap((p) => hunksNear(p, finding.line, finding.endLine, HUNK_MARGIN));
+  if (hunks.length === 0) return null;
+  const lines = finding.endLine && finding.endLine !== finding.line ? `${finding.line}-${finding.endLine}` : `${finding.line}`;
+  return [
+    `<review_comment reviewer="${finding.bot}" path="${finding.path}" lines="${lines}">`,
+    clip(finding.body, MAX_COMMENT_CHARS),
+    "</review_comment>",
+    "",
+    `<diff_after_comment path="${finding.path}">`,
+    clip(hunks.join("\n"), MAX_DIFF_CHARS),
+    "</diff_after_comment>"
+  ].join("\n");
+}
+var ClaudeFixJudge = class {
+  client;
+  cache;
+  model;
+  warn;
+  /** Requests made (cache misses), for the run summary. */
+  calls = 0;
+  constructor(options) {
+    this.client = options.client ?? new Anthropic();
+    this.cache = options.cache;
+    this.model = options.model ?? DEFAULT_AI_MODEL;
+    this.warn = options.warn ?? (() => {
+    });
+  }
+  async judge(finding, patches) {
+    const prompt = fixPrompt(finding, patches);
+    if (!prompt) return null;
+    const key = ["fix-judge-v1", this.model, SYSTEM_PROMPT, prompt];
+    try {
+      return await this.cache.wrap(key, () => {
+        this.calls += 1;
+        return askClaude(this.client, { model: this.model, effort: "medium", system: SYSTEM_PROMPT, prompt, schema: VerdictSchema });
+      });
+    } catch (error63) {
+      if (isFatal(error63)) throw new Error(`--ai can't reach Claude: ${describeError(error63)}`);
+      this.warn(`fix check for ${finding.url} failed, keeping the proximity rule: ${describeError(error63)}`);
+      return null;
+    }
+  }
+};
+
 // src/ai/reply-intent.ts
+init_sdk();
 var REPLY_INTENTS = ["fixed", "will-fix", "disagrees", "acknowledged", "question", "unclear"];
 var IntentSchema = external_exports.object({
   intent: external_exports.enum(REPLY_INTENTS),
   reason: external_exports.string()
 });
-var DEFAULT_AI_MODEL = "claude-opus-5-5";
-var MAX_COMMENT_CHARS = 3e3;
+var MAX_COMMENT_CHARS2 = 3e3;
 var MAX_REPLY_CHARS = 1500;
-var SYSTEM_PROMPT = `You label how people responded to an AI code reviewer's comment on a GitHub pull request.
+var SYSTEM_PROMPT2 = `You label how people responded to an AI code reviewer's comment on a GitHub pull request.
 
 You get the reviewer's comment and the human replies in its thread, oldest first. Decide what the replies, taken together, say happened to the comment. The latest decision wins: if someone first asks a question and later says it's fixed, the answer is "fixed".
 
@@ -77460,14 +77607,12 @@ Labels:
 - unclear: the replies don't say enough to tell.
 
 Judge only from the text. Don't guess whether the code changed. Give a reason of at most 20 words.`;
-var clip = (text, max) => text.length > max ? `${text.slice(0, max)}
-[\u2026cut]` : text;
 function replyPrompt(finding) {
   const replies = finding.replies.map((r, i) => `<reply index="${i + 1}" author="${r.author}">
 ${clip(r.body, MAX_REPLY_CHARS)}
 </reply>`).join("\n");
   return `<review_comment reviewer="${finding.bot}" path="${finding.path ?? ""}">
-${clip(finding.body, MAX_COMMENT_CHARS)}
+${clip(finding.body, MAX_COMMENT_CHARS2)}
 </review_comment>
 
 ${replies}`;
@@ -77489,42 +77634,29 @@ var ClaudeReplyJudge = class {
   async judge(finding) {
     if (finding.replies.length === 0) return null;
     const prompt = replyPrompt(finding);
-    const key = ["reply-intent-v1", this.model, SYSTEM_PROMPT, prompt];
+    const key = ["reply-intent-v1", this.model, SYSTEM_PROMPT2, prompt];
     try {
-      return await this.cache.wrap(key, () => this.ask(prompt));
+      return await this.cache.wrap(key, () => {
+        this.calls += 1;
+        return askClaude(this.client, { model: this.model, effort: "low", system: SYSTEM_PROMPT2, prompt, schema: IntentSchema });
+      });
     } catch (error63) {
-      const fatal = error63 instanceof Anthropic.AuthenticationError || error63 instanceof Anthropic.PermissionDeniedError || !(error63 instanceof Anthropic.APIError) && /authentication/i.test(String(error63));
-      if (fatal) throw new Error(`--ai can't reach Claude: ${error63 instanceof Error ? error63.message : String(error63)}`);
-      this.warn(`reply intent for ${finding.url} failed, using phrase rules: ${error63 instanceof Error ? error63.message : String(error63)}`);
+      if (isFatal(error63)) throw new Error(`--ai can't reach Claude: ${describeError(error63)}`);
+      this.warn(`reply intent for ${finding.url} failed, using phrase rules: ${describeError(error63)}`);
       return null;
     }
-  }
-  async ask(prompt) {
-    this.calls += 1;
-    const response = await this.client.beta.messages.parse({
-      model: this.model,
-      max_tokens: 4096,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: "low", format: zodOutputFormat(IntentSchema) },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: prompt }]
-    });
-    if (response.stop_reason === "refusal") throw new Error("the model declined");
-    if (!response.parsed_output) throw new Error(`no structured output (stop reason: ${response.stop_reason})`);
-    return { ...response.parsed_output, model: response.model };
   }
 };
 async function judgeReplies(judge, findings, concurrency = 4) {
   const results = /* @__PURE__ */ new Map();
-  const queue = findings.filter((f) => f.source === "inline" && f.replies.length > 0);
-  const worker = async () => {
-    for (let f = queue.shift(); f; f = queue.shift()) {
+  await eachLimited(
+    findings.filter((f) => f.source === "inline" && f.replies.length > 0),
+    concurrency,
+    async (f) => {
       const intent = await judge.judge(f);
       if (intent) results.set(f.commentId, intent);
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  );
   return results;
 }
 
@@ -79535,6 +79667,10 @@ function botStats(bot, repo, prs, findings) {
     addressedRate: ratio(addressed, mine.length),
     dismissedRate: ratio(dismissed, mine.length),
     acknowledgedRate: ratio(acknowledged, mine.length),
+    aiChecked: mine.filter((f) => f.fixVerdict).length,
+    aiFixed: mine.filter((f) => f.fixVerdict?.verdict === "fixed").length,
+    aiPartly: mine.filter((f) => f.fixVerdict?.verdict === "partly").length,
+    aiUnrelated: mine.filter((f) => f.fixVerdict?.verdict === "unrelated").length,
     ignoredRate: ratio(ignored, mine.length),
     notAddressedRate: ratio(notAddressed, mine.length),
     findingsPerPr: ratio(mine.length, prsReviewed),
@@ -79650,13 +79786,13 @@ function summaryGist(body) {
   const html = gist(body, 100).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return html.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/`/g, "");
 }
-var MAX_COMMENT_CHARS2 = 4e3;
+var MAX_COMMENT_CHARS3 = 4e3;
 function fullComment(body, url2) {
   let text = body.replace(/<!--[\s\S]*?-->/g, "").replace(/\r\n/g, "\n").trim();
   let cut = false;
-  if (text.length > MAX_COMMENT_CHARS2) {
-    const at = text.lastIndexOf("\n\n", MAX_COMMENT_CHARS2);
-    text = text.slice(0, at > MAX_COMMENT_CHARS2 / 2 ? at : MAX_COMMENT_CHARS2).trimEnd();
+  if (text.length > MAX_COMMENT_CHARS3) {
+    const at = text.lastIndexOf("\n\n", MAX_COMMENT_CHARS3);
+    text = text.slice(0, at > MAX_COMMENT_CHARS3 / 2 ? at : MAX_COMMENT_CHARS3).trimEnd();
     cut = true;
   }
   if ((text.match(/^ {0,3}(```|~~~)/gm) ?? []).length % 2 === 1) text += "\n```";
@@ -79815,6 +79951,7 @@ function fullTable(rows, withRepo) {
     ...hasSummary ? [["Not addressed", (s) => rate(s.notAddressed, s.notAddressedRate, s.findings)]] : [],
     ["Outdated", (s) => s.findings === 0 ? "\u2013" : s.outdated],
     ["Per PR", (s) => s.findings === 0 ? "\u2013" : num(s.findingsPerPr)],
+    ...rows.some((s) => s.aiChecked > 0) ? [["AI: fixed \xB7 partly \xB7 unrelated", (s) => s.aiChecked === 0 ? "\u2013" : `${s.aiFixed} \xB7 ${s.aiPartly} \xB7 ${s.aiUnrelated}`]] : [],
     ["First comment", (s) => duration3(s.medianFirstCommentMinutes)]
   ];
   return [
@@ -79835,6 +79972,8 @@ var HOW_IT_WORKS = [
   "- \u{1F4A4} **Ignored**: no reply, reaction, resolution or nearby change. Summary items can't be replied to or resolved, so the full breakdown lists them separately as **not addressed**.",
   "- \u{1F578}\uFE0F **Outdated**: GitHub marked the thread outdated, but no nearby change was found.",
   "",
+  "With `--ai`, Claude also reads what human replies mean (instead of matching phrases), and checks each nearby change against the comment. A change it judges unrelated doesn't count as addressed.",
+  "",
   "These are heuristics: a nearby change isn't proof the comment caused it, and a fix made in a later PR looks ignored. The JSON report records the rule behind every outcome."
 ].join("\n");
 function renderMarkdown(ledger, { fullComments = true } = {}) {
@@ -79852,6 +79991,14 @@ function renderMarkdown(ledger, { fullComments = true } = {}) {
     out.push("### Reviewers");
     out.push(reviewersTable(ledger.byBot));
     out.push(LEGEND);
+    const checked = ledger.byBot.reduce((n, s) => n + s.aiChecked, 0);
+    if (checked > 0) {
+      const sum = (k) => ledger.byBot.reduce((n, s) => n + s[k], 0);
+      out.push(
+        `> [!NOTE]
+> **AI-checked fixes:** Claude reviewed ${plural2(checked, "change")} made near a finding. ${sum("aiFixed")} fixed it, ${sum("aiPartly")} partly, and **${sum("aiUnrelated")} were unrelated**, so those no longer count as addressed. The rest couldn't be told from the diff and still count.`
+      );
+    }
   }
   if (ledger.topIgnoredFiles.length > 0) {
     out.push("### \u{1F4A4} Files with the most ignored findings");
@@ -79912,48 +80059,13 @@ function renderMarkdown(ledger, { fullComments = true } = {}) {
   more.push(details("\u2139\uFE0F How findings are scored", HOW_IT_WORKS));
   out.push("---");
   out.push(more.join("\n\n"));
-  const aiModels = [...new Set(ledger.findings.flatMap((f) => f.replyIntent ? [f.replyIntent.model] : []))];
-  const aiNote = aiModels.length > 0 ? ` \xB7 replies read by ${aiModels.join(", ")}` : "";
+  const aiModels = [
+    ...new Set(ledger.findings.flatMap((f) => [f.replyIntent?.model, f.fixVerdict?.model].filter((m) => Boolean(m))))
+  ];
+  const aiNote = aiModels.length > 0 ? ` \xB7 replies and fixes checked by ${aiModels.join(", ")}` : "";
   out.push(`<sub>Generated by mindthebot \xB7 read-only: it never comments on, changes or approves a PR${aiNote}</sub>`);
   return `${out.join("\n\n")}
 `;
-}
-
-// src/classify/patch.ts
-function touchedOldLines(patch) {
-  const touched = /* @__PURE__ */ new Set();
-  let oldLine = 0;
-  let inHunk = false;
-  let afterDeletion = false;
-  for (const line of patch.split("\n")) {
-    const header = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
-    if (header) {
-      oldLine = Number(header[1]);
-      inHunk = true;
-      afterDeletion = false;
-      continue;
-    }
-    if (!inHunk) continue;
-    if (line.startsWith("-")) {
-      touched.add(oldLine);
-      oldLine += 1;
-      afterDeletion = true;
-    } else if (line.startsWith("+")) {
-      if (!afterDeletion) {
-        touched.add(Math.max(oldLine - 1, 1));
-        touched.add(oldLine);
-      }
-    } else if (line.startsWith("\\")) {
-    } else {
-      oldLine += 1;
-      afterDeletion = false;
-    }
-  }
-  return [...touched].sort((a, b) => a - b);
-}
-function isNear(touched, line, proximity, endLine = null) {
-  const end = endLine ?? line;
-  return touched.some((t) => t >= line - proximity && t <= end + proximity);
 }
 
 // src/classify/rules.ts
@@ -79970,17 +80082,25 @@ function repliesMatch(finding, phrases) {
   const pattern = new RegExp(`\\b(?:${phrases.map(escapeRegExp).join("|")})\\b`, "i");
   return finding.replies.some((r) => pattern.test(r.body));
 }
-function classify(finding, changes, config2, intent) {
-  const ai = intent ? ` (AI read the replies as "${intent.intent}": ${intent.reason})` : "";
+function hasNearbyChange(finding, changes, config2) {
+  const fileLines = finding.path && changes ? changes[resolvePath2(finding.path, changes)] : void 0;
+  return Array.isArray(fileLines) && finding.line !== null && isNear(fileLines, finding.line, config2.proximity, finding.endLine);
+}
+function classify(finding, changes, config2, intent, fix) {
+  const notes = [
+    ...intent ? [`AI read the replies as "${intent.intent}": ${intent.reason}`] : [],
+    ...fix ? [`AI judged the nearby change "${fix.verdict}": ${fix.reason}`] : []
+  ];
   const result = (outcome, reason) => ({
     ...finding,
     outcome,
-    reason: `${reason}${ai}`,
-    ...intent ? { replyIntent: intent } : {}
+    reason: notes.length > 0 ? `${reason} (${notes.join("; ")})` : reason,
+    ...intent ? { replyIntent: intent } : {},
+    ...fix ? { fixVerdict: fix } : {}
   });
   const fileLines = finding.path && changes ? changes[resolvePath2(finding.path, changes)] : void 0;
   const fileChanged = fileLines !== void 0;
-  const nearbyChange = Array.isArray(fileLines) && finding.line !== null && isNear(fileLines, finding.line, config2.proximity, finding.endLine);
+  const nearbyChange = Array.isArray(fileLines) && finding.line !== null && isNear(fileLines, finding.line, config2.proximity, finding.endLine) && fix?.verdict !== "unrelated";
   const saidDismissed = intent ? intent.intent === "disagrees" : repliesMatch(finding, config2.dismissedPhrases);
   const saidFixed = intent ? intent.intent === "fixed" : repliesMatch(finding, config2.addressedPhrases);
   if (saidDismissed && !saidFixed) return result("dismissed", "reply dismisses the finding");
@@ -80052,8 +80172,8 @@ async function commitFiles(client, cache, owner, name, oid) {
     return { files: slim(res.data.files) };
   });
 }
-async function changedLinesSince(client, cache, repo, baseOid, headOid, prCommits = []) {
-  if (baseOid === headOid) return {};
+async function filesSince(client, cache, repo, baseOid, headOid, prCommits = []) {
+  if (baseOid === headOid) return [];
   const { owner, name } = splitRepo(repo);
   const index = prCommits.findIndex((c) => c.oid === baseOid);
   const after = index >= 0 ? prCommits.slice(index + 1) : prCommits;
@@ -80061,28 +80181,38 @@ async function changedLinesSince(client, cache, repo, baseOid, headOid, prCommit
   try {
     if (!mergedBaseAfterComment) {
       const { files } = await compareFiles(client, cache, owner, name, baseOid, headOid);
-      if (files.length < FILE_LIMIT) return toChangedLines(files);
+      if (files.length < FILE_LIMIT) return files;
     }
     const own2 = after.filter((c) => !c.isMerge).slice(-MAX_COMMITS);
-    if (own2.length === 0) return after.length > 0 ? {} : null;
-    const changed = {};
-    const renames = [];
-    for (const commit of own2) {
-      const { files } = await commitFiles(client, cache, owner, name, commit.oid);
-      toChangedLines(files, changed);
-      for (const f of files) if (f.previous_filename) renames.push([f.previous_filename, f.filename]);
-    }
-    for (const [from, to] of renames) {
-      const merged = mergeLines(changed[from], changed[to]);
-      changed[from] = merged;
-      changed[to] = merged;
-    }
-    return changed;
+    if (own2.length === 0) return after.length > 0 ? [] : null;
+    const all = [];
+    for (const commit of own2) all.push(...(await commitFiles(client, cache, owner, name, commit.oid)).files);
+    return all;
   } catch (error63) {
     const status = error63.status;
     if (status === 404 || status === 422) return null;
     throw error63;
   }
+}
+async function changedLinesSince(client, cache, repo, baseOid, headOid, prCommits = []) {
+  const files = await filesSince(client, cache, repo, baseOid, headOid, prCommits);
+  if (files === null) return null;
+  const changed = toChangedLines(files);
+  for (const f of files) {
+    if (!f.previous_filename) continue;
+    const merged = mergeLines(changed[f.previous_filename], changed[f.filename]);
+    changed[f.previous_filename] = merged;
+    changed[f.filename] = merged;
+  }
+  return changed;
+}
+function patchesFor(files, path4) {
+  const names = /* @__PURE__ */ new Set([path4]);
+  for (const f of files) if (f.previous_filename && (names.has(f.filename) || names.has(f.previous_filename))) {
+    names.add(f.filename);
+    names.add(f.previous_filename);
+  }
+  return files.filter((f) => f.patch && (names.has(f.filename) || f.previous_filename && names.has(f.previous_filename))).map((f) => f.patch);
 }
 
 // src/detect/bots.ts
@@ -80398,6 +80528,7 @@ async function fetchMergedPullRequests(client, cache, repo, sinceMs, maxPrs) {
 }
 
 // src/run.ts
+var findingKey = (f) => `${f.commentId}:${f.path}:${f.line}`;
 async function run(client, cache, config2, options) {
   const log = options.log ?? (() => {
   });
@@ -80410,22 +80541,36 @@ async function run(client, cache, config2, options) {
     const prs = raw.map((pr) => toRecord(repo, pr, config2));
     const findingCount = prs.reduce((n, pr) => n + pr.findings.length, 0);
     log(`${repo}: ${prs.length} PRs, ${findingCount} AI findings`);
-    const intents = options.replyJudge ? await judgeReplies(options.replyJudge, prs.flatMap((pr) => pr.findings)) : /* @__PURE__ */ new Map();
-    if (options.replyJudge) log(`${repo}: AI read the replies on ${intents.size} threads`);
+    const withDiffs = [];
     for (const pr of prs) {
       const diffs = /* @__PURE__ */ new Map();
       for (const finding of pr.findings) {
-        let changes;
-        if (finding.commitOid) {
-          if (!diffs.has(finding.commitOid)) {
-            diffs.set(finding.commitOid, await changedLinesSince(client, cache, repo, finding.commitOid, pr.headOid, pr.commits));
-          }
-          changes = diffs.get(finding.commitOid);
-        } else {
-          changes = null;
+        const oid = finding.commitOid;
+        if (oid && !diffs.has(oid)) {
+          diffs.set(oid, {
+            changes: await changedLinesSince(client, cache, repo, oid, pr.headOid, pr.commits),
+            files: options.fixJudge ? await filesSince(client, cache, repo, oid, pr.headOid, pr.commits) : null
+          });
         }
-        classified.push(classify(finding, changes, config2, intents.get(finding.commentId)));
+        withDiffs.push({ finding, diff: oid ? diffs.get(oid) : { changes: null, files: null } });
       }
+    }
+    const intents = options.replyJudge ? await judgeReplies(options.replyJudge, withDiffs.map((d) => d.finding)) : /* @__PURE__ */ new Map();
+    if (options.replyJudge) log(`${repo}: AI read the replies on ${intents.size} threads`);
+    const verdicts = /* @__PURE__ */ new Map();
+    if (options.fixJudge) {
+      const judge = options.fixJudge;
+      const candidates = withDiffs.filter(({ finding, diff }) => diff.files && hasNearbyChange(finding, diff.changes, config2));
+      await eachLimited(candidates, 4, async ({ finding, diff }) => {
+        const path4 = diff.changes ? resolvePath2(finding.path, diff.changes) : finding.path;
+        const verdict = await judge.judge({ ...finding, path: path4 }, patchesFor(diff.files, path4));
+        if (verdict) verdicts.set(findingKey(finding), verdict);
+      });
+      const overturned = [...verdicts.values()].filter((v) => v.verdict === "unrelated").length;
+      log(`${repo}: AI checked ${verdicts.size} of ${candidates.length} nearby changes; ${overturned} judged unrelated`);
+    }
+    for (const { finding, diff } of withDiffs) {
+      classified.push(classify(finding, diff.changes, config2, intents.get(finding.commentId), verdicts.get(findingKey(finding))));
     }
     records.push(...prs);
   }
@@ -80464,22 +80609,26 @@ async function main() {
   const client = createClient(token);
   const cache = new Cache(".mindthebot/cache", false);
   let replyJudge;
+  let fixJudge;
   if (getBooleanInput("ai")) {
     const apiKey = getInput("anthropic-api-key");
     if (!apiKey) throw new Error("ai: true needs the anthropic-api-key input.");
     setSecret(apiKey);
-    replyJudge = new ClaudeReplyJudge({
+    const ai = {
       cache,
       model: getInput("ai-model") || DEFAULT_AI_MODEL,
       client: new Anthropic({ apiKey }),
       warn: (m) => warning(m)
-    });
+    };
+    replyJudge = new ClaudeReplyJudge(ai);
+    fixJudge = new ClaudeFixJudge(ai);
   }
   const ledger = await run(client, cache, config2, {
     repos,
     since,
     maxPrs,
     replyJudge,
+    fixJudge,
     log: (m) => info(m)
   });
   const markdown = renderMarkdown(ledger);

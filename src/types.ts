@@ -1,3 +1,4 @@
+import type { FixVerdict } from "./ai/fix-judge.ts";
 import type { ReplyIntent } from "./ai/reply-intent.ts";
 
 /** A human reply in a review thread, after the bot's opening comment. */
@@ -85,4 +86,6 @@ export interface ClassifiedFinding extends Finding {
   reason: string;
   /** With --ai: what the model read the human replies as. */
   replyIntent?: ReplyIntent;
+  /** With --ai: whether the model judged the nearby change to have fixed the finding. */
+  fixVerdict?: FixVerdict;
 }

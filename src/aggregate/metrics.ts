@@ -24,6 +24,11 @@ export interface BotStats {
   addressedRate: number;
   dismissedRate: number;
   acknowledgedRate: number;
+  /** With --ai: nearby changes the model checked, and how it judged them. */
+  aiChecked: number;
+  aiFixed: number;
+  aiPartly: number;
+  aiUnrelated: number;
   ignoredRate: number;
   notAddressedRate: number;
   findingsPerPr: number;
@@ -127,6 +132,10 @@ function botStats(
     addressedRate: ratio(addressed, mine.length),
     dismissedRate: ratio(dismissed, mine.length),
     acknowledgedRate: ratio(acknowledged, mine.length),
+    aiChecked: mine.filter((f) => f.fixVerdict).length,
+    aiFixed: mine.filter((f) => f.fixVerdict?.verdict === "fixed").length,
+    aiPartly: mine.filter((f) => f.fixVerdict?.verdict === "partly").length,
+    aiUnrelated: mine.filter((f) => f.fixVerdict?.verdict === "unrelated").length,
     ignoredRate: ratio(ignored, mine.length),
     notAddressedRate: ratio(notAddressed, mine.length),
     findingsPerPr: ratio(mine.length, prsReviewed),
